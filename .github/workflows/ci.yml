@@ -4,10 +4,13 @@ name: CI
 on:
   workflow_dispatch:
   workflow_call:
+  # Run on PRs targeting any branch, so shared development branches are tested
+  # before they are merged, not only PRs into main.
   pull_request:
-    branches: [main]
   push:
-    branches: [main]
+    # Postsubmit on main plus the branches the team develops on directly.
+    # Add your team's shared branch pattern here if it is not covered.
+    branches: [main, 'claude/**', 'dev/**']
 
 concurrency:
   # A PR number if a pull request and otherwise the commit hash. This cancels
@@ -24,14 +27,31 @@ jobs:
         torch-version: [nightly, stable]
 
     name: Build and Test (Linux, torch-${{ matrix.torch-version }}, assertions)
-    runs-on: torch-mlir-cpubuilder-linux-x86-64-scale
+    # GitHub-hosted runner by default so this works on a fork. To use a bigger
+    # or self-hosted runner, set the repository variable CI_LINUX_RUNNER
+    # (Settings > Secrets and variables > Actions > Variables), e.g. to the
+    # label of a larger runner. A cold LLVM build is slow on 4 cores; the
+    # ccache restored below makes later runs much faster.
+    runs-on: ${{ vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 350
     env:
       CACHE_DIR: ${{ github.workspace }}/.container-cache
     steps:
+      - name: Free disk space
+        # Hosted runners have ~14GB free; an LLVM+MLIR build needs more.
+        if: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: "Checking out repository"
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: true
+
+      - name: Install toolchain (clang, lld)
+        # build_posix.sh builds with clang and the lld linker.
+        run: sudo apt-get update && sudo apt-get install --yes clang lld
 
       - name: Enable cache
         uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
@@ -41,14 +61,11 @@ jobs:
           restore-keys: |
             build-test-cpp-asserts-manylinux-${{ matrix.torch-version }}-v2-
 
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2.20
-        with:
-          key: ${{ github.job }}-${{ matrix.torch-version }}
-          save: ${{ needs.setup.outputs.write-caches == 1 }}
-
       - name: Setup workspace and python
         uses: ./.github/actions/setup-build
+        with:
+          # ccache is persisted via CACHE_DIR below (used by build_posix.sh).
+          cache-enabled: 'false'
 
       - name: Display Python version and path
         run: |
