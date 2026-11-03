@@ -9,15 +9,79 @@ to run the same checks locally.
 | --- | --- | --- |
 | `pre-commit.yml` | every PR | Formatting/lint of the lines changed in the PR |
 | `pre-commit-all.yml` | push to `main` | Formatting/lint of the whole tree |
-| `ci.yml` | every PR; push to `main`, `claude/**`, `dev/**`; manual | Build + C++/lit tests + Python e2e tests + generated-source check, on torch `nightly` and `stable` |
+| `ci.yml` | every PR; push to `main`, `claude/**`, `dev/**`; **daily schedule**; manual | Build + C++/lit tests + Python e2e tests + generated-source check, on torch `nightly` and `stable` (scheduled/manual runs add a `nightly-latest` canary). See [CI tiers](#ci-tiers) |
 | `ci_windows.yml` | push to `main`; manual | MSVC build still compiles |
 | `bazelBuildAndTest.yml` | push to `main`; manual | Bazel build and tests |
 | `buildRelease.yml`, `*SnapshotPackage.yml`, `gh-pages-releases.yml` | manual only | Python wheels and release publishing (upstream-only) |
-| `RollPyTorch.yml`, `merge-rollpytorch.yml` | nightly / after roll | Automatic PyTorch version bump (upstream-only; skipped on forks) |
+| `RollPyTorch.yml`, `merge-rollpytorch.yml` | daily / after roll | Automatic PyTorch version bump (upstream-only; skipped on forks) |
 
 "CD" in this project means producing the Python wheels and snapshot releases.
 Those workflows are deliberately disabled on forks; see
 [Release workflows](#release-workflows).
+
+## CI tiers
+
+"Nightly" is overloaded in this project, so be precise:
+
+| Term | Meaning |
+| --- | --- |
+| torch **`nightly`** | A *PyTorch version*: the daily PyTorch dev build **pinned** in `pytorch-requirements.txt`. A job leg, not a time of day. |
+| torch **`stable`** | A *PyTorch version*: the latest released PyTorch. |
+| torch **`nightly-latest`** | A *PyTorch version*: the **newest** PyTorch nightly, unpinned. A canary. |
+| **Nightly run** | A *schedule*: `ci.yml` firing from `cron` at 02:17 UTC. Not a release. |
+
+| Tier | When | What runs | Blocking? |
+| --- | --- | --- | --- |
+| **1. PR / push gate** | every PR; push to `main`, `claude/**`, `dev/**` | `pre-commit`, then `ci.yml` legs `nightly` and `stable` | Yes: require them in branch protection |
+| **2. Scheduled nightly run** | daily, on the tip of `NIGHTLY_BRANCH` (default `dev`) | Legs `nightly`, `stable` **and** `nightly-latest`; every leg runs to completion (no fail-fast) | No: it reports, nobody is waiting on it |
+
+What differs between the tiers is *what is checked and against which code*, not
+the test programs. Both tiers run the same scripts and the same e2e test
+suites.
+
+- **Tier 1 answers:** "does this change break anything?" It tests the PR's
+  code against two PyTorch versions.
+- **Tier 2 answers:** "is the branch still healthy, and is PyTorch about to
+  break us?" It re-tests the branch with no new commit (catching expired
+  dependencies, flaky tests and drift), and the `nightly-latest` leg tests
+  against tomorrow's PyTorch. A red `nightly-latest` with green `nightly` means
+  the next roll of the pin will need code changes; fix it on your schedule.
+- `nightly-latest` runs everything `nightly` does except the generated-source
+  check, which only makes sense against the pinned build.
+
+Pieces of one run, for reference:
+
+| Leg | Build + lit | ONNX e2e | FX-importer e2e (Linalg, StableHLO, TOSA) | Generated-source check |
+| --- | --- | --- | --- | --- |
+| `stable` | yes | yes | no | no |
+| `nightly` | yes | yes | yes | yes |
+| `nightly-latest` (tier 2 only) | yes | yes | yes | no |
+
+### ONNX e2e vs FX-importer e2e
+
+Both are end to end (import, lower, run on the reference backend, compare with
+eager PyTorch). They differ in the front door:
+
+- `--config=onnx` exports each test model to **ONNX** and re-imports it through
+  the torch-onnx-to-torch path. It tests the ONNX importer and its conversions.
+- `--config=fx_importer*` imports the PyTorch **FX graph** (`torch.export`)
+  directly, then lowers to Linalg, StableHLO or TOSA. It tests the FX importer
+  and each lowering path.
+
+A bug in the ONNX conversion fails only the first; a bug in a Linalg lowering
+typically fails both, and a StableHLO- or TOSA-only bug fails only that config.
+
+### Requirements for the schedule to run
+
+- GitHub only fires `schedule` from the **default branch's** copy of `ci.yml`.
+  If your default branch is `main` and you develop on `dev`, merge this
+  workflow into `main`; `ci.yml` then checks out `dev` (set the repository
+  variable `NIGHTLY_BRANCH` to use another branch).
+- On forks, scheduled workflows are off until you enable Actions under the
+  **Actions** tab. GitHub also pauses schedules after 60 days without repo
+  activity.
+- Scheduled failures notify the person who last changed the cron line. Watch
+  the Actions tab or set up notifications for failed workflows.
 
 ## What is tested, and why
 
@@ -54,9 +118,11 @@ Those workflows are deliberately disabled on forks; see
    `torch_ods_gen.py` / `abstract_interp_lib_gen.py` without regenerating, and
    drift against the pinned PyTorch.
 
-Why both torch versions: *nightly* is what the repo pins and tests most deeply;
-*stable* confirms the build and ONNX path still work for users on a released
-torch. A change that passes only on nightly is a compatibility risk.
+Why several torch versions: *nightly* (pinned) is what the repo is developed
+against and tested most deeply; *stable* confirms the build and ONNX path still
+work for users on a released torch; *nightly-latest* (scheduled only) gives
+early warning of upstream PyTorch changes. A change that passes only on
+nightly is a compatibility risk.
 
 ### Things the pipeline does not cover (decide if you need them)
 
@@ -93,8 +159,10 @@ These cannot be set from files in the repo:
 2. **Settings > Branches > Branch protection** for `main` (and the shared
    development branch): require pull requests and require these status checks:
    `pre-commit` and `Build and Test (Linux, torch-nightly, assertions)` /
-   `(…, torch-stable, …)`.
-3. Optionally set the `CI_LINUX_RUNNER` variable (see above).
+   `(…, torch-stable, …)`. Do **not** require the `torch-nightly-latest` leg:
+   it only runs on the schedule.
+3. Optionally set the `CI_LINUX_RUNNER` variable (see above) and
+   `NIGHTLY_BRANCH` (branch the scheduled run tests; default `dev`).
 
 ## Running the checks locally
 
@@ -104,9 +172,9 @@ pip install pre-commit && pre-commit run --all-files
 
 # Build + unit tests + e2e (same scripts as CI; needs clang, lld, ccache, ninja)
 git submodule update --init --recursive
-./build_tools/ci/install_python_deps.sh nightly
+./build_tools/ci/install_python_deps.sh nightly   # or: stable | nightly-latest
 ./build_tools/ci/build_posix.sh
-./build_tools/ci/test_posix.sh nightly
+./build_tools/ci/test_posix.sh nightly            # same argument as above
 ./build_tools/ci/check_generated_sources.sh
 ```
 

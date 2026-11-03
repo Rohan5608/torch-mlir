@@ -13,7 +13,7 @@ python3 -m e2e_testing.main --config=onnx -v
 echo "::endgroup::"
 
 case $torch_version in
-  nightly)
+  nightly|nightly-latest)
     # Failing with: NotImplementedError:
     #   Could not run 'aten::empty.memory_format' with arguments from the 'Lazy' backend.
     # As of 2024-01-07
@@ -39,7 +39,7 @@ case $torch_version in
   stable)
     ;;
   *)
-    echo "Unrecognized torch version '$torch_version' (specify 'nightly' or 'stable' with cl arg)"
+    echo "Unrecognized torch version '$torch_version' (specify 'nightly', 'nightly-latest' or 'stable' with cl arg)"
     exit 1
     ;;
 esac

@@ -1,9 +1,22 @@
 # yamllint disable rule:line-length
 name: CI
 
+# Two tiers (see docs/ci.md):
+#   Tier 1 - PR / push gate: torch `nightly` (the pinned build) and `stable`.
+#   Tier 2 - scheduled nightly run of the shared dev branch: the same two legs
+#            plus a `nightly-latest` canary against the newest PyTorch nightly.
 on:
   workflow_dispatch:
+    inputs:
+      include-latest-nightly:
+        description: 'Also run the nightly-latest canary leg (newest PyTorch nightly)'
+        type: boolean
+        default: false
   workflow_call:
+  schedule:
+    # 02:17 UTC daily. Scheduled runs always use the workflow file on the
+    # repository's default branch, and test NIGHTLY_BRANCH (see checkout below).
+    - cron: '17 2 * * *'
   # Run on PRs targeting any branch, so shared development branches are tested
   # before they are merged, not only PRs into main.
   pull_request:
@@ -22,9 +35,11 @@ concurrency:
 jobs:
   build-test-linux:
     strategy:
-      fail-fast: true
+      # PRs stop at the first failure. Scheduled runs let every leg finish so a
+      # canary failure does not hide the result of the gating legs.
+      fail-fast: ${{ github.event_name != 'schedule' }}
       matrix:
-        torch-version: [nightly, stable]
+        torch-version: ${{ fromJSON((github.event_name == 'schedule' || inputs.include-latest-nightly) && '["nightly","stable","nightly-latest"]' || '["nightly","stable"]') }}
 
     name: Build and Test (Linux, torch-${{ matrix.torch-version }}, assertions)
     # GitHub-hosted runner by default so this works on a fork. To use a bigger
@@ -48,6 +63,9 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: true
+          # Scheduled runs test the shared dev branch (override with the
+          # repository variable NIGHTLY_BRANCH); other events use their own ref.
+          ref: ${{ github.event_name == 'schedule' && (vars.NIGHTLY_BRANCH || 'dev') || '' }}
 
       - name: Install toolchain (clang, lld)
         # build_posix.sh builds with clang and the lld linker.
