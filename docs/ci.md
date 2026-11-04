@@ -9,7 +9,7 @@ to run the same checks locally.
 | --- | --- | --- |
 | `pre-commit.yml` | every PR | Formatting/lint of the lines changed in the PR |
 | `pre-commit-all.yml` | push to `main` | Formatting/lint of the whole tree |
-| `ci.yml` | every PR; push to `main`, `claude/**`, `dev/**`; **daily schedule**; manual | Build + C++/lit tests + Python e2e tests + generated-source check, on torch `nightly` and `stable` (scheduled/manual runs add a `nightly-latest` canary). See [CI tiers](#ci-tiers) |
+| `ci.yml` | every PR; push to `main`, `claude/**`, `dev/**`; **daily schedule**; manual | Build + C++/lit tests + Python e2e tests + generated-source check, on torch `nightly` and `stable`. See [CI tiers](#ci-tiers) |
 | `ci_windows.yml` | push to `main`; manual | MSVC build still compiles |
 | `bazelBuildAndTest.yml` | push to `main`; manual | Bazel build and tests |
 | `buildRelease.yml`, `*SnapshotPackage.yml`, `gh-pages-releases.yml` | manual only | Python wheels and release publishing (upstream-only) |
@@ -25,9 +25,7 @@ Those workflows are deliberately disabled on forks; see
 
 | File | Change |
 | --- | --- |
-| `.github/workflows/ci.yml` | Hosted runner by default (`CI_LINUX_RUNNER` override); triggers on PRs to any branch and on pushes to `main`, `claude/**`, `dev/**`; daily `schedule`; `nightly-latest` canary leg on scheduled/manual runs; installs clang+lld; frees disk; removed the ccache action whose save condition could never be true |
-| `build_tools/ci/install_python_deps.sh` | New `nightly-latest` case (newest PyTorch nightly, unpinned) |
-| `build_tools/ci/test_posix.sh` | `nightly-latest` runs the same e2e suites as `nightly` |
+| `.github/workflows/ci.yml` | Hosted runner by default (`CI_LINUX_RUNNER` override); triggers on PRs to any branch and on pushes to `main`, `claude/**`, `dev/**`; daily `schedule`; installs clang+lld; frees disk; removed the ccache action whose save condition could never be true |
 | `docs/ci.md` | This document (new) |
 
 ### Files deliberately not changed
@@ -53,7 +51,7 @@ Those workflows are deliberately disabled on forks; see
    `CI_LINUX_RUNNER` (bigger runner label), `NIGHTLY_BRANCH` (default `dev`).
 4. **Settings > Branches**: protect `main`/`dev`; require `pre-commit`,
    `Build and Test (Linux, torch-nightly, assertions)` and
-   `(…, torch-stable, …)`. Do not require the `nightly-latest` leg.
+   `(…, torch-stable, …)`.
 5. Open a PR and check the Actions tab.
 
 ### Known issue: stale PyTorch pin
@@ -74,13 +72,12 @@ then `build_tools/update_torch_ods.sh` and `update_abstract_interp_lib.sh`).
 | --- | --- |
 | torch **`nightly`** | A *PyTorch version*: the daily PyTorch dev build **pinned** in `pytorch-requirements.txt`. A job leg, not a time of day. |
 | torch **`stable`** | A *PyTorch version*: the latest released PyTorch. |
-| torch **`nightly-latest`** | A *PyTorch version*: the **newest** PyTorch nightly, unpinned. A canary. |
 | **Nightly run** | A *schedule*: `ci.yml` firing from `cron` at 02:17 UTC. Not a release. |
 
 | Tier | When | What runs | Blocking? |
 | --- | --- | --- | --- |
 | **1. PR / push gate** | every PR; push to `main`, `claude/**`, `dev/**` | `pre-commit`, then `ci.yml` legs `nightly` and `stable` | Yes: require them in branch protection |
-| **2. Scheduled nightly run** | daily, on the tip of `NIGHTLY_BRANCH` (default `dev`) | Legs `nightly`, `stable` **and** `nightly-latest`; every leg runs to completion (no fail-fast) | No: it reports, nobody is waiting on it |
+| **2. Scheduled nightly run** | daily, on the tip of `NIGHTLY_BRANCH` (default `dev`) | Legs `nightly` and `stable`; every leg runs to completion (no fail-fast) | No: it reports, nobody is waiting on it |
 
 What differs between the tiers is *what is checked and against which code*, not
 the test programs. Both tiers run the same scripts and the same e2e test
@@ -88,13 +85,9 @@ suites.
 
 - **Tier 1 answers:** "does this change break anything?" It tests the PR's
   code against two PyTorch versions.
-- **Tier 2 answers:** "is the branch still healthy, and is PyTorch about to
-  break us?" It re-tests the branch with no new commit (catching expired
-  dependencies, flaky tests and drift), and the `nightly-latest` leg tests
-  against tomorrow's PyTorch. A red `nightly-latest` with green `nightly` means
-  the next roll of the pin will need code changes; fix it on your schedule.
-- `nightly-latest` runs everything `nightly` does except the generated-source
-  check, which only makes sense against the pinned build.
+- **Tier 2 answers:** "is the branch still healthy?" It re-tests the branch
+  with no new commit, catching expired dependencies (such as a PyTorch wheel
+  that disappears from the index), flaky tests and drift.
 
 Pieces of one run, for reference:
 
@@ -102,7 +95,6 @@ Pieces of one run, for reference:
 | --- | --- | --- | --- | --- |
 | `stable` | yes | yes | no | no |
 | `nightly` | yes | yes | yes | yes |
-| `nightly-latest` (tier 2 only) | yes | yes | yes | no |
 
 ### ONNX e2e vs FX-importer e2e
 
@@ -165,11 +157,10 @@ typically fails both, and a StableHLO- or TOSA-only bug fails only that config.
    `torch_ods_gen.py` / `abstract_interp_lib_gen.py` without regenerating, and
    drift against the pinned PyTorch.
 
-Why several torch versions: *nightly* (pinned) is what the repo is developed
+Why both torch versions: *nightly* (pinned) is what the repo is developed
 against and tested most deeply; *stable* confirms the build and ONNX path still
-work for users on a released torch; *nightly-latest* (scheduled only) gives
-early warning of upstream PyTorch changes. A change that passes only on
-nightly is a compatibility risk.
+work for users on a released torch. A change that passes only on nightly is a
+compatibility risk.
 
 ### The two kinds of test, concretely
 
@@ -234,8 +225,7 @@ Practical rules:
 - Added a test that cannot pass yet: add it to the right set with a comment
   saying why.
 - Lists are **per config** and tied to the PyTorch version they were written
-  for, so the `nightly-latest` canary may show XPASS/FAIL entries that the
-  pinned `nightly` leg does not.
+  for, so rolling the pin can produce XPASS or FAIL entries that need updating.
 - Tests that crash the process (segfault) cannot be XFAILed; they go in the
   matching `*_CRASHING_SET` and are not run at all.
 
@@ -274,8 +264,7 @@ These cannot be set from files in the repo:
 2. **Settings > Branches > Branch protection** for `main` (and the shared
    development branch): require pull requests and require these status checks:
    `pre-commit` and `Build and Test (Linux, torch-nightly, assertions)` /
-   `(…, torch-stable, …)`. Do **not** require the `torch-nightly-latest` leg:
-   it only runs on the schedule.
+   `(…, torch-stable, …)`.
 3. Optionally set the `CI_LINUX_RUNNER` variable (see above) and
    `NIGHTLY_BRANCH` (branch the scheduled run tests; default `dev`).
 
@@ -285,7 +274,7 @@ These cannot be set from files in the repo:
 
 | Script / file | Role |
 | --- | --- |
-| `build_tools/ci/test_posix.sh <nightly\|nightly-latest\|stable>` | CI entry point for e2e tests. Sets `PYTHONPATH`, then runs `python3 -m e2e_testing.main --config=<cfg> -v` for `onnx` (all legs) and `fx_importer`, `fx_importer_stablehlo`, `fx_importer_tosa` (nightly legs) |
+| `build_tools/ci/test_posix.sh <nightly\|stable>` | CI entry point for e2e tests. Sets `PYTHONPATH`, then runs `python3 -m e2e_testing.main --config=<cfg> -v` for `onnx` (all legs) and `fx_importer`, `fx_importer_stablehlo`, `fx_importer_tosa` (nightly legs) |
 | `projects/pt1/e2e_testing/main.py` | The e2e runner. Picks the config (compile route), the xfail/crashing sets, filters (`-f`), and prints the PASS/FAIL/XFAIL/XPASS report |
 | `projects/pt1/e2e_testing/xfail_sets.py` | Per-config lists of tests expected to fail or crash |
 | `projects/pt1/python/torch_mlir_e2e_test/test_suite/*.py` | The ~1700 test cases themselves |
@@ -332,7 +321,7 @@ pip install pre-commit && pre-commit run --all-files
 
 # Build + unit tests + e2e (same scripts as CI; needs clang, lld, ccache, ninja)
 git submodule update --init --recursive
-./build_tools/ci/install_python_deps.sh nightly   # or: stable | nightly-latest
+./build_tools/ci/install_python_deps.sh nightly   # or: stable
 ./build_tools/ci/build_posix.sh
 ./build_tools/ci/test_posix.sh nightly            # same argument as above
 ./build_tools/ci/check_generated_sources.sh

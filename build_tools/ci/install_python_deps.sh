@@ -13,16 +13,6 @@ case $torch_version in
     python3 -m pip install --no-cache-dir -r $repo_root/torchvision-requirements.txt
     echo "::endgroup::"
     ;;
-  nightly-latest)
-    # Canary: the newest PyTorch nightly, not the build pinned in
-    # pytorch-requirements.txt. Catches upstream breakage before the pin is
-    # rolled forward.
-    echo "::group::installing latest nightly torch"
-    python3 -m pip install --no-cache-dir --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cpu
-    python3 -m pip install --no-cache-dir -r $repo_root/build-requirements.txt
-    python3 -m pip install --no-cache-dir -r $repo_root/externals/llvm-project/mlir/python/requirements.txt
-    echo "::endgroup::"
-    ;;
   stable)
     echo "::group::installing stable torch"
     python3 -m pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
@@ -30,7 +20,7 @@ case $torch_version in
     echo "::endgroup::"
     ;;
   *)
-    echo "Unrecognized torch version '$torch_version' (specify 'nightly', 'nightly-latest' or 'stable' with cl arg)"
+    echo "Unrecognized torch version '$torch_version' (specify 'nightly' or 'stable' with cl arg)"
     exit 1
     ;;
 esac
