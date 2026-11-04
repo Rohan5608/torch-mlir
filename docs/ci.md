@@ -171,6 +171,74 @@ work for users on a released torch; *nightly-latest* (scheduled only) gives
 early warning of upstream PyTorch changes. A change that passes only on
 nightly is a compatibility risk.
 
+### The two kinds of test, concretely
+
+**Unit tests (lit + FileCheck)** live under `test/` as `.mlir` files. Each has
+a few lines of input IR and the IR expected after a pass. Nothing is executed.
+Example (`test/Conversion/TorchToLinalg/elementwise.mlir`):
+
+```
+// RUN: torch-mlir-opt <%s -convert-torch-to-linalg ... | FileCheck %s
+func.func @elementwise$unary(%arg0: !torch.vtensor<[],f32>) ... {
+  %0 = torch.aten.tanh %arg0 ...      // input: a PyTorch tanh
+}
+// CHECK: linalg.generic ...          // expected: a linalg loop
+// CHECK:   math.tanh ...             // applying math.tanh per element
+```
+
+Main folders: `test/Dialect/Torch` (op verification, folding, decompositions,
+shape/dtype inference), `test/Conversion/TorchToLinalg`, `TorchToStablehlo`,
+`TorchToTosa`, `TorchOnnxToTorch` (one folder per lowering), and
+`test/Dialect/TorchConversion`. A failure means a pass now produces different
+IR; it may be a real bug or an intended change whose expectation needs
+updating.
+
+**End-to-end (e2e) tests** check the *numbers*. Each is a small PyTorch module
+plus an input, in `projects/pt1/python/torch_mlir_e2e_test/test_suite/*.py`
+(about 1700 cases). Example (`elementwise.py`):
+
+```python
+class ElementwiseAddModule(torch.nn.Module):
+    def forward(self, a, b):
+        return a + b
+
+@register_test_case(module_factory=lambda: ElementwiseAddModule())
+def ElementwiseAddModule_basic(module, tu):
+    module.forward(tu.rand(4), tu.rand())
+```
+
+For each test the runner (1) runs the module in plain PyTorch to get the
+expected result, (2) compiles it through torch-mlir, (3) runs it on the
+reference backend, (4) compares. A mismatch is a FAIL.
+
+### XFAIL: expected failures
+
+Torch-mlir does not support every PyTorch op, so some e2e tests fail today.
+Rather than leave CI permanently red, known failures are listed per config in
+`projects/pt1/e2e_testing/xfail_sets.py` (`ONNX_XFAIL_SET`,
+`FX_IMPORTER_XFAIL_SET`, ...). The runner classifies every test:
+
+| Result | On the xfail list? | Outcome | CI |
+| --- | --- | --- | --- |
+| passes | no | PASS | green |
+| fails | no | **FAIL** (new bug) | red |
+| fails | yes | XFAIL (known gap) | green |
+| passes | yes | **XPASS** (list is stale) | red |
+
+XPASS is deliberately an error: when you fix an op, the test starts passing and
+CI forces you to delete its name from the list in the same PR, so the list
+never rots and a later regression in that test is not silently ignored.
+Practical rules:
+
+- Fixed a lowering and CI reports XPASS: remove the name from the right set.
+- Added a test that cannot pass yet: add it to the right set with a comment
+  saying why.
+- Lists are **per config** and tied to the PyTorch version they were written
+  for, so the `nightly-latest` canary may show XPASS/FAIL entries that the
+  pinned `nightly` leg does not.
+- Tests that crash the process (segfault) cannot be XFAILed; they go in the
+  matching `*_CRASHING_SET` and are not run at all.
+
 ### Things the pipeline does not cover (decide if you need them)
 
 - Release builds (`-DCMAKE_BUILD_TYPE=Release` is used, but with assertions
