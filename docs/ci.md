@@ -211,6 +211,51 @@ These cannot be set from files in the repo:
 3. Optionally set the `CI_LINUX_RUNNER` variable (see above) and
    `NIGHTLY_BRANCH` (branch the scheduled run tests; default `dev`).
 
+## Script reference
+
+### End-to-end testing
+
+| Script / file | Role |
+| --- | --- |
+| `build_tools/ci/test_posix.sh <nightly\|nightly-latest\|stable>` | CI entry point for e2e tests. Sets `PYTHONPATH`, then runs `python3 -m e2e_testing.main --config=<cfg> -v` for `onnx` (all legs) and `fx_importer`, `fx_importer_stablehlo`, `fx_importer_tosa` (nightly legs) |
+| `projects/pt1/e2e_testing/main.py` | The e2e runner. Picks the config (compile route), the xfail/crashing sets, filters (`-f`), and prints the PASS/FAIL/XFAIL/XPASS report |
+| `projects/pt1/e2e_testing/xfail_sets.py` | Per-config lists of tests expected to fail or crash |
+| `projects/pt1/python/torch_mlir_e2e_test/test_suite/*.py` | The ~1700 test cases themselves |
+| `projects/pt1/python/torch_mlir_e2e_test/configs/*.py` | How each config compiles and runs a module (`onnx_backend.py`, `fx_importer_backend.py`, ...) |
+| `projects/pt1/python/torch_mlir_e2e_test/reporting.py` | Compares results with the golden PyTorch output and classifies outcomes |
+
+Unit (lit/FileCheck) tests are not a script: `build_posix.sh` builds the CMake
+target `check-torch-mlir-all`, which runs `lit` over `test/`.
+
+### Build and CI helpers
+
+| Script | Role | Used by |
+| --- | --- | --- |
+| `build_tools/ci/install_python_deps.sh` | Installs the torch variant plus test requirements | `ci.yml` |
+| `build_tools/ci/build_posix.sh` | CMake configure, build, and `check-torch-mlir-all` | `ci.yml` |
+| `build_tools/ci/check_generated_sources.sh` | Regenerates and diffs generated files | `ci.yml` (nightly leg) |
+| `build_tools/update_torch_ods.sh`, `update_abstract_interp_lib.sh` | Regenerate `GeneratedTorchOps.td` and `AbstractInterpLibrary.cpp`. Run these yourself after editing `torch_ods_gen.py` / `abstract_interp_lib_gen.py` | You; `check_generated_sources.sh` |
+| `build_tools/python_deploy/build_windows_ci.sh` | Windows build | `ci_windows.yml` |
+| `build_tools/build_standalone.sh`, `write_env_file.sh` | Local out-of-tree configure; `.env` for IDE/Python paths | Developers |
+| `build_tools/e2eshark_build.sh` | Builds torch-mlir for the separate *e2eshark* suite | That project's CI, not this one |
+
+### Release packaging ("nightly release" / snapshots)
+
+These are unrelated to the `nightly` torch leg. They produce Python wheels and
+GitHub releases, and are **not enabled** on this fork.
+
+| Script / workflow | Role |
+| --- | --- |
+| `releaseSnapshotPackage.yml` | Tags `snapshot-<date>.<run>`, creates a draft GitHub release, then dispatches the build. Upstream's `cron` for it is commented out, so it only runs manually |
+| `oneshotSnapshotPackage.yml` | Same, tagged `oneshot-<date>.<run>`, from a chosen ref |
+| `buildRelease.yml` | Builds wheels for Linux, macOS and Windows and uploads them to the release |
+| `build_tools/python_deploy/build_linux_packages.sh` | Builds manylinux wheels inside Docker (`build_tools/docker/Dockerfile`) |
+| `build_tools/python_deploy/build_macos_packages.sh`, `install_macos_deps.sh`, `build_upload_m1_snapshot.sh` | macOS wheels |
+| `build_tools/python_deploy/build_windows.ps1` | Windows wheels |
+| `build_tools/build_python_wheels.sh` | Builds and smoke-tests wheels in a venv |
+| `gh-pages-releases.yml` + `build_tools/scrape_releases.py` | Regenerates a pip-installable release index page from the GitHub releases API |
+| `RollPyTorch.yml` | Daily: finds the newest PyTorch nightly, bumps the pin files, regenerates sources, opens a PR |
+
 ## Running the checks locally
 
 ```shell
