@@ -1,16 +1,11 @@
 # yamllint disable rule:line-length
 name: CI
 
-# Two tiers (see docs/ci.md):
-#   Tier 1 - PR / push gate: torch `nightly` (the pinned build) and `stable`.
-#   Tier 2 - scheduled nightly run of the shared dev branch: the same two legs.
+# Each run tests two PyTorch versions: `nightly` (the pinned build) and
+# `stable`. See docs/ci.md.
 on:
   workflow_dispatch:
   workflow_call:
-  schedule:
-    # 02:17 UTC daily. Scheduled runs always use the workflow file on the
-    # repository's default branch, and test NIGHTLY_BRANCH (see checkout below).
-    - cron: '17 2 * * *'
   # Run on PRs targeting any branch, so shared development branches are tested
   # before they are merged, not only PRs into main.
   pull_request:
@@ -29,9 +24,7 @@ concurrency:
 jobs:
   build-test-linux:
     strategy:
-      # PRs stop at the first failure. Scheduled runs let every leg finish so
-      # one failing leg does not hide the result of the other.
-      fail-fast: ${{ github.event_name != 'schedule' }}
+      fail-fast: true
       matrix:
         torch-version: [nightly, stable]
 
@@ -57,9 +50,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: true
-          # Scheduled runs test the shared dev branch (override with the
-          # repository variable NIGHTLY_BRANCH); other events use their own ref.
-          ref: ${{ github.event_name == 'schedule' && (vars.NIGHTLY_BRANCH || 'dev') || '' }}
 
       - name: Install toolchain (clang, lld)
         # build_posix.sh builds with clang and the lld linker.

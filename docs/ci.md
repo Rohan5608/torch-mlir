@@ -9,7 +9,7 @@ to run the same checks locally.
 | --- | --- | --- |
 | `pre-commit.yml` | every PR | Formatting/lint of the lines changed in the PR |
 | `pre-commit-all.yml` | push to `main` | Formatting/lint of the whole tree |
-| `ci.yml` | every PR; push to `main`, `claude/**`, `dev/**`; **daily schedule**; manual | Build + C++/lit tests + Python e2e tests + generated-source check, on torch `nightly` and `stable`. See [CI tiers](#ci-tiers) |
+| `ci.yml` | every PR; push to `main`, `claude/**`, `dev/**`; manual | Build + C++/lit tests + Python e2e tests + generated-source check, on torch `nightly` and `stable`. See [nightly vs stable](#nightly-vs-stable-torch-versions) |
 | `ci_windows.yml` | push to `main`; manual | MSVC build still compiles |
 | `bazelBuildAndTest.yml` | push to `main`; manual | Bazel build and tests |
 | `buildRelease.yml`, `*SnapshotPackage.yml`, `gh-pages-releases.yml` | manual only | Python wheels and release publishing (upstream-only) |
@@ -25,7 +25,7 @@ Those workflows are deliberately disabled on forks; see
 
 | File | Change |
 | --- | --- |
-| `.github/workflows/ci.yml` | Hosted runner by default (`CI_LINUX_RUNNER` override); triggers on PRs to any branch and on pushes to `main`, `claude/**`, `dev/**`; daily `schedule`; installs clang+lld; frees disk; removed the ccache action whose save condition could never be true |
+| `.github/workflows/ci.yml` | Hosted runner by default (`CI_LINUX_RUNNER` override); triggers on PRs to any branch and on pushes to `main`, `claude/**`, `dev/**`; installs clang+lld; frees disk; removed the ccache action whose save condition could never be true |
 | `docs/ci.md` | This document (new) |
 
 ### Files deliberately not changed
@@ -43,12 +43,11 @@ Those workflows are deliberately disabled on forks; see
 
 ### Steps to turn it on
 
-1. Merge the PR containing these changes (`ci.yml` must be on the repository's
-   **default branch** for the schedule to fire).
+1. Merge the PR containing these changes.
 2. **Settings > Actions > General**: allow actions, and enable workflows on the
    fork from the **Actions** tab.
 3. Optional **Settings > Secrets and variables > Actions > Variables**:
-   `CI_LINUX_RUNNER` (bigger runner label), `NIGHTLY_BRANCH` (default `dev`).
+   `CI_LINUX_RUNNER` (bigger runner label).
 4. **Settings > Branches**: protect `main`/`dev`; require `pre-commit`,
    `Build and Test (Linux, torch-nightly, assertions)` and
    `(…, torch-stable, …)`.
@@ -64,32 +63,22 @@ which is skipped on forks. Fix by merging the current upstream
 (`pytorch-hash.txt`, `pytorch-requirements.txt`, `torchvision-requirements.txt`,
 then `build_tools/update_torch_ods.sh` and `update_abstract_interp_lib.sh`).
 
-## CI tiers
+## Nightly vs stable torch versions
 
-"Nightly" is overloaded in this project, so be precise:
+"Nightly" is easy to misread. Here it is **not** a time of day, a schedule or
+a release. It is one of two PyTorch versions that every CI run tests:
 
-| Term | Meaning |
+| Leg | PyTorch installed |
 | --- | --- |
-| torch **`nightly`** | A *PyTorch version*: the daily PyTorch dev build **pinned** in `pytorch-requirements.txt`. A job leg, not a time of day. |
-| torch **`stable`** | A *PyTorch version*: the latest released PyTorch. |
-| **Nightly run** | A *schedule*: `ci.yml` firing from `cron` at 02:17 UTC. Not a release. |
+| torch **`nightly`** | The daily PyTorch dev build **pinned** in `pytorch-requirements.txt`. The repo's code generators and importers are written against this build. |
+| torch **`stable`** | The latest released PyTorch. |
 
-| Tier | When | What runs | Blocking? |
-| --- | --- | --- | --- |
-| **1. PR / push gate** | every PR; push to `main`, `claude/**`, `dev/**` | `pre-commit`, then `ci.yml` legs `nightly` and `stable` | Yes: require them in branch protection |
-| **2. Scheduled nightly run** | daily, on the tip of `NIGHTLY_BRANCH` (default `dev`) | Legs `nightly` and `stable`; every leg runs to completion (no fail-fast) | No: it reports, nobody is waiting on it |
+CI runs on every PR and on pushes to `main`, `claude/**` and `dev/**`; each run
+starts both legs in parallel. There are no scheduled runs and no separate test
+suites: the legs differ only in which PyTorch they install and therefore which
+tests apply (next table). Require both in branch protection.
 
-What differs between the tiers is *what is checked and against which code*, not
-the test programs. Both tiers run the same scripts and the same e2e test
-suites.
-
-- **Tier 1 answers:** "does this change break anything?" It tests the PR's
-  code against two PyTorch versions.
-- **Tier 2 answers:** "is the branch still healthy?" It re-tests the branch
-  with no new commit, catching expired dependencies (such as a PyTorch wheel
-  that disappears from the index), flaky tests and drift.
-
-Pieces of one run, for reference:
+What each leg runs:
 
 | Leg | Build + lit | ONNX e2e | FX-importer e2e (Linalg, StableHLO, TOSA) | Generated-source check |
 | --- | --- | --- | --- | --- |
@@ -109,18 +98,6 @@ eager PyTorch). They differ in the front door:
 
 A bug in the ONNX conversion fails only the first; a bug in a Linalg lowering
 typically fails both, and a StableHLO- or TOSA-only bug fails only that config.
-
-### Requirements for the schedule to run
-
-- GitHub only fires `schedule` from the **default branch's** copy of `ci.yml`.
-  If your default branch is `main` and you develop on `dev`, merge this
-  workflow into `main`; `ci.yml` then checks out `dev` (set the repository
-  variable `NIGHTLY_BRANCH` to use another branch).
-- On forks, scheduled workflows are off until you enable Actions under the
-  **Actions** tab. GitHub also pauses schedules after 60 days without repo
-  activity.
-- Scheduled failures notify the person who last changed the cron line. Watch
-  the Actions tab or set up notifications for failed workflows.
 
 ## What is tested, and why
 
@@ -265,8 +242,7 @@ These cannot be set from files in the repo:
    development branch): require pull requests and require these status checks:
    `pre-commit` and `Build and Test (Linux, torch-nightly, assertions)` /
    `(…, torch-stable, …)`.
-3. Optionally set the `CI_LINUX_RUNNER` variable (see above) and
-   `NIGHTLY_BRANCH` (branch the scheduled run tests; default `dev`).
+3. Optionally set the `CI_LINUX_RUNNER` variable (see above).
 
 ## Script reference
 
