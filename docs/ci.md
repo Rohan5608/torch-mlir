@@ -19,6 +19,53 @@ to run the same checks locally.
 Those workflows are deliberately disabled on forks; see
 [Release workflows](#release-workflows).
 
+## Enabling the pipeline: files changed and not changed
+
+### Files changed (the whole CI/CD change set)
+
+| File | Change |
+| --- | --- |
+| `.github/workflows/ci.yml` | Hosted runner by default (`CI_LINUX_RUNNER` override); triggers on PRs to any branch and on pushes to `main`, `claude/**`, `dev/**`; daily `schedule`; `nightly-latest` canary leg on scheduled/manual runs; installs clang+lld; frees disk; removed the ccache action whose save condition could never be true |
+| `build_tools/ci/install_python_deps.sh` | New `nightly-latest` case (newest PyTorch nightly, unpinned) |
+| `build_tools/ci/test_posix.sh` | `nightly-latest` runs the same e2e suites as `nightly` |
+| `docs/ci.md` | This document (new) |
+
+### Files deliberately not changed
+
+| File(s) | Why |
+| --- | --- |
+| `build_tools/ci/build_posix.sh`, `linux_default_toolchain.cmake`, `check_generated_sources.sh` | Already correct for any runner; changing them adds merge conflicts with upstream for no benefit |
+| `.github/actions/setup-build/action.yml` | Reused as is (called with `cache-enabled: 'false'`) |
+| `.github/workflows/pre-commit.yml`, `pre-commit-all.yml`, `.pre-commit-config.yaml` | Work unchanged on hosted runners |
+| `ci_windows.yml`, `bazelBuildAndTest.yml` | Already use hosted runners; run on pushes to `main` only |
+| `RollPyTorch.yml`, `merge-rollpytorch.yml`, `oneshotSnapshotPackage.yml`, `releaseSnapshotPackage.yml`, `gh-pages-releases.yml` | Upstream-only (secrets, runners); skipped on forks by their own `if:` guard |
+| `buildRelease.yml` | Not touched; manual only and needs an `a100` runner, so do not run it on a fork |
+| `pytorch-requirements.txt`, `pytorch-hash.txt`, `requirements.txt` | The PyTorch pin. Stale on this fork (see below); updating it is a separate decision |
+| `projects/pt1/e2e_testing/xfail_sets.py` and all test sources | Test content is not part of enabling CI |
+
+### Steps to turn it on
+
+1. Merge the PR containing these changes (`ci.yml` must be on the repository's
+   **default branch** for the schedule to fire).
+2. **Settings > Actions > General**: allow actions, and enable workflows on the
+   fork from the **Actions** tab.
+3. Optional **Settings > Secrets and variables > Actions > Variables**:
+   `CI_LINUX_RUNNER` (bigger runner label), `NIGHTLY_BRANCH` (default `dev`).
+4. **Settings > Branches**: protect `main`/`dev`; require `pre-commit`,
+   `Build and Test (Linux, torch-nightly, assertions)` and
+   `(…, torch-stable, …)`. Do not require the `nightly-latest` leg.
+5. Open a PR and check the Actions tab.
+
+### Known issue: stale PyTorch pin
+
+`pytorch-requirements.txt` pins a PyTorch nightly wheel that the PyTorch index
+has since deleted, so the pinned `nightly` leg fails at "Install python deps"
+until the pin is refreshed. Upstream refreshes it daily with `RollPyTorch.yml`,
+which is skipped on forks. Fix by merging the current upstream
+(`iree-org/torch-mlir`) `main` into your branch, or by rolling the pin by hand
+(`pytorch-hash.txt`, `pytorch-requirements.txt`, `torchvision-requirements.txt`,
+then `build_tools/update_torch_ods.sh` and `update_abstract_interp_lib.sh`).
+
 ## CI tiers
 
 "Nightly" is overloaded in this project, so be precise:
